@@ -102,7 +102,7 @@ study-buddy-bro/
 
 ## 👨‍💻 Built By
 
-**Vedant Baviskar** — Built for a Hackathon 🏆
+**Vedant & Shreyash** — Built for a Hackathon 🏆
 
 ---
 

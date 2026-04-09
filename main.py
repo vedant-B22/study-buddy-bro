@@ -4,6 +4,7 @@ import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from dotenv import load_dotenv
+from agent import run_agent_with_memory, get_conversation_history
 
 load_dotenv()
 
@@ -43,7 +44,7 @@ async def chat(request: Request):
         loop  = asyncio.get_event_loop()
         reply = await loop.run_in_executor(
             None,
-            run_agent_sync,
+            run_agent_with_memory,
             session_id,
             user_message
         )
@@ -60,17 +61,9 @@ async def chat(request: Request):
             content={"error": str(e), "status": "failed"}
         )
 
-
-def run_agent_sync(session_id: str, user_message: str) -> str:
-    """Runs the agent synchronously inside executor thread."""
-    from agent import run_agent_with_memory
-    return run_agent_with_memory(session_id, user_message)
-
-
 @app.get("/history/{session_id}")
 async def get_history(session_id: str):
     try:
-        from agent import get_conversation_history
         history = get_conversation_history(session_id)
         return JSONResponse(content={
             "session_id": session_id,

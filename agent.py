@@ -1,6 +1,7 @@
 import os
 import datetime
 import asyncio
+import logging
 import nest_asyncio
 from google.adk.agents import Agent
 from google.adk.runners import Runner
@@ -37,8 +38,8 @@ def save_conversation(session_id: str, role: str, message: str):
             "timestamp": datetime.datetime.utcnow()
         })
         db.put(entity)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.error(f"Failed to save conversation for session {session_id}: {e}")
  
 def get_conversation_history(session_id: str) -> list:
     try:
@@ -49,7 +50,8 @@ def get_conversation_history(session_id: str) -> list:
         query.order = ["timestamp"]
         messages = list(query.fetch(limit=10))
         return [{"role": m["role"], "message": m["message"]} for m in messages]
-    except Exception:
+    except Exception as e:
+        logging.error(f"Failed to get conversation history for session {session_id}: {e}")
         return []
  
 def save_student_profile(session_id: str, data: dict):

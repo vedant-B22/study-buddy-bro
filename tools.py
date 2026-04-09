@@ -1,10 +1,13 @@
 import os
 import datetime
+import logging
 import requests
+import base64
 from google.cloud import datastore
 from googleapiclient.discovery import build
 from google.auth import default
 from dotenv import load_dotenv
+from email.mime.text import MIMEText
 
 load_dotenv()
 
@@ -41,6 +44,7 @@ def get_google_services():
         tasks    = build("tasks",    "v1", credentials=creds)
         return calendar, gmail, tasks
     except Exception as e:
+        logging.error(f"Failed to get Google services: {e}")
         return None, None, None
 
 def create_study_schedule(topic: str, exam_date: str, daily_hours: int = 2, session_id: str = "default") -> str:
@@ -212,8 +216,6 @@ def get_progress(session_id: str) -> str:
 
 def send_study_reminder(to_email: str, subject_line: str, body: str) -> str:
     try:
-        import base64
-        from email.mime.text import MIMEText
         _, gmail, _ = get_google_services()
         if not gmail:
             return f"Reminder saved: '{subject_line}' for {to_email}"

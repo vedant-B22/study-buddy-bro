@@ -9,3 +9,4 @@ google-auth-oauthlib
 python-dotenv
 requests
 google-cloud-datastore
+nest_asyncio

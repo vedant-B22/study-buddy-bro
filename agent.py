@@ -1,6 +1,7 @@
 import os
 import datetime
 import asyncio
+import nest_asyncio
 from google.adk.agents import Agent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -13,17 +14,19 @@ from tools import (
     generate_quiz, explain_topic, send_study_reminder,
     get_progress, update_progress, add_study_topic
 )
-
+ 
+# Apply nest_asyncio at module level — this is the key fix
+nest_asyncio.apply()
+ 
 load_dotenv()
-
+ 
 db = datastore.Client(
     project="study-buddy-bro-guide",
     database="study-buddy-datastore"
 )
-
+ 
 def save_conversation(session_id: str, role: str, message: str):
     try:
-        # Truncate message to 1400 chars to stay under Datastore 1500 byte limit
         truncated = message[:1400] if len(message) > 1400 else message
         key = db.key("conversations", f"{session_id}_{datetime.datetime.utcnow().timestamp()}")
         entity = datastore.Entity(key=key, exclude_from_indexes=("message",))
@@ -36,7 +39,7 @@ def save_conversation(session_id: str, role: str, message: str):
         db.put(entity)
     except Exception:
         pass
-
+ 
 def get_conversation_history(session_id: str) -> list:
     try:
         query = db.query(kind="conversations")
@@ -48,18 +51,20 @@ def get_conversation_history(session_id: str) -> list:
         return [{"role": m["role"], "message": m["message"]} for m in messages]
     except Exception:
         return []
-
+ 
 def save_student_profile(session_id: str, data: dict):
     key = db.key("students", session_id)
     entity = db.get(key) or datastore.Entity(key=key)
     entity.update(data)
     db.put(entity)
-
+ 
 def get_student_profile(session_id: str) -> dict:
     key = db.key("students", session_id)
     entity = db.get(key)
     return dict(entity) if entity else {}
-
+ 
+# ── Agents ────────────────────────────────────────────────────────────────────
+ 
 schedule_agent = Agent(
     name="schedule_agent",
     model="gemini-2.0-flash",
@@ -69,7 +74,7 @@ schedule_agent = Agent(
     and suggest how to split study time. Be encouraging and realistic.""",
     tools=[FunctionTool(create_study_schedule), FunctionTool(get_upcoming_exams)]
 )
-
+ 
 quiz_agent = Agent(
     name="quiz_agent",
     model="gemini-2.0-flash",
@@ -79,7 +84,7 @@ quiz_agent = Agent(
     Create clear, accurate questions matched to the student's topic.""",
     tools=[FunctionTool(generate_quiz)]
 )
-
+ 
 explainer_agent = Agent(
     name="explainer_agent",
     model="gemini-2.0-flash",
@@ -89,7 +94,7 @@ explainer_agent = Agent(
     and real-world examples. Always check if the student understood.""",
     tools=[FunctionTool(explain_topic)]
 )
-
+ 
 progress_agent = Agent(
     name="progress_agent",
     model="gemini-2.0-flash",
@@ -99,7 +104,7 @@ progress_agent = Agent(
     maintain study streaks and motivate the student.""",
     tools=[FunctionTool(get_progress), FunctionTool(update_progress), FunctionTool(add_study_topic)]
 )
-
+ 
 reminder_agent = Agent(
     name="reminder_agent",
     model="gemini-2.0-flash",
@@ -109,7 +114,7 @@ reminder_agent = Agent(
     Keep messages short, clear and motivating.""",
     tools=[FunctionTool(send_study_reminder)]
 )
-
+ 
 primary_agent = Agent(
     name="studybuddy_primary",
     model="gemini-2.0-flash",
@@ -121,29 +126,64 @@ primary_agent = Agent(
     - explainer_agent: understanding topics, concepts, explanations
     - progress_agent: tracking completed topics, study streaks
     - reminder_agent: email reminders and notifications
-
+ 
     When a student messages you:
     1. Understand their intent
     2. Route to correct sub-agent (or multiple if needed)
     3. Combine responses into one friendly reply
     4. End with an encouraging message or next step
-
+ 
     Examples:
     - "I have a math exam in 2 days" → schedule_agent + reminder_agent
     - "Explain photosynthesis" → explainer_agent
     - "Quiz me on Python" → quiz_agent
     - "What have I studied?" → progress_agent
-
+ 
     Always be warm, supportive and student-friendly.""",
     sub_agents=[schedule_agent, quiz_agent, explainer_agent, progress_agent, reminder_agent]
 )
-
+ 
 def get_agent():
     return primary_agent
-
+ 
+# ── Runner ────────────────────────────────────────────────────────────────────
+ 
+async def _run_agent_async(session_id: str, full_message: str) -> str:
+    """Core async function — runs the ADK agent pipeline."""
+    svc = InMemorySessionService()
+    r = Runner(
+        agent=primary_agent,
+        app_name="study-buddy-bro",
+        session_service=svc
+    )
+    await svc.create_session(
+        app_name="study-buddy-bro",
+        user_id="user",
+        session_id=session_id
+    )
+    content = types.Content(
+        role="user",
+        parts=[types.Part(text=full_message)]
+    )
+    result = "I'm here to help! What are you studying today? 📚"
+    async for event in r.run_async(
+        user_id="user",
+        session_id=session_id,
+        new_message=content
+    ):
+        if hasattr(event, 'is_final_response') and event.is_final_response():
+            if hasattr(event, 'content') and event.content:
+                for part in event.content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        result = part.text
+                        break
+    return result
+ 
+ 
 def run_agent_with_memory(session_id: str, user_message: str) -> str:
     save_conversation(session_id, "user", user_message)
     history = get_conversation_history(session_id)
+ 
     context = ""
     if history:
         context = "Previous conversation:\n"
@@ -151,47 +191,16 @@ def run_agent_with_memory(session_id: str, user_message: str) -> str:
             context += f"{h['role'].upper()}: {h['message']}\n"
         context += "\nCurrent message: "
     full_message = context + user_message
+ 
     reply = "I'm here to help! What are you studying today? 📚"
     try:
-        import nest_asyncio
-        nest_asyncio.apply()
-
-        async def run_async():
-            svc = InMemorySessionService()
-            r = Runner(
-                agent=primary_agent,
-                app_name="study-buddy-bro",
-                session_service=svc
-            )
-            await svc.create_session(
-                app_name="study-buddy-bro",
-                user_id="user",
-                session_id=session_id
-            )
-            content = types.Content(
-                role="user",
-                parts=[types.Part(text=full_message)]
-            )
-            result = "I'm here to help! What are you studying today? 📚"
-            async for event in r.run_async(
-                user_id="user",
-                session_id=session_id,
-                new_message=content
-            ):
-                if hasattr(event, 'is_final_response') and event.is_final_response():
-                    if hasattr(event, 'content') and event.content:
-                        for part in event.content.parts:
-                            if hasattr(part, 'text') and part.text:
-                                result = part.text
-                                break
-            return result
-
+        # nest_asyncio is already applied at module level.
+        # This safely runs the coroutine whether or not a loop is already running.
         loop = asyncio.get_event_loop()
-        reply = loop.run_until_complete(run_async())
-
+        reply = loop.run_until_complete(_run_agent_async(session_id, full_message))
     except Exception as e:
         reply = f"Agent error: {str(e)}"
-
+ 
     save_conversation(session_id, "assistant", reply)
     save_student_profile(session_id, {
         "last_active": datetime.datetime.utcnow(),

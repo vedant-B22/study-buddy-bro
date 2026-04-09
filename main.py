@@ -1,9 +1,9 @@
 import os
 import uuid
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from dotenv import load_dotenv
-from agent import run_agent_with_memory
 
 load_dotenv()
 
@@ -16,8 +16,14 @@ async def health_check():
         "app": "Study Buddy Bro",
         "project": "study-buddy-bro-guide",
         "database": "study-buddy-datastore",
-        "agents": ["studybuddy_primary", "schedule_agent", "quiz_agent",
-                   "explainer_agent", "progress_agent", "reminder_agent"]
+        "agents": [
+            "studybuddy_primary",
+            "schedule_agent",
+            "quiz_agent",
+            "explainer_agent",
+            "progress_agent",
+            "reminder_agent"
+        ]
     }
 
 @app.post("/chat")
@@ -26,21 +32,56 @@ async def chat(request: Request):
         body         = await request.json()
         user_message = body.get("message", "").strip()
         session_id   = body.get("session_id", str(uuid.uuid4()))
+
         if not user_message:
-            return JSONResponse(status_code=400, content={"error": "Message cannot be empty"})
-        reply = run_agent_with_memory(session_id, user_message)
-        return JSONResponse(content={"session_id": session_id, "reply": reply, "status": "success"})
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Message cannot be empty"}
+            )
+
+        # Run agent in a separate thread to avoid ADK timeout issue
+        loop  = asyncio.get_event_loop()
+        reply = await loop.run_in_executor(
+            None,
+            run_agent_sync,
+            session_id,
+            user_message
+        )
+
+        return JSONResponse(content={
+            "session_id": session_id,
+            "reply": reply,
+            "status": "success"
+        })
+
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e), "status": "failed"})
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "status": "failed"}
+        )
+
+
+def run_agent_sync(session_id: str, user_message: str) -> str:
+    """Runs the agent synchronously inside executor thread."""
+    from agent import run_agent_with_memory
+    return run_agent_with_memory(session_id, user_message)
+
 
 @app.get("/history/{session_id}")
 async def get_history(session_id: str):
     try:
         from agent import get_conversation_history
         history = get_conversation_history(session_id)
-        return JSONResponse(content={"session_id": session_id, "history": history, "count": len(history)})
+        return JSONResponse(content={
+            "session_id": session_id,
+            "history": history,
+            "count": len(history)
+        })
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
@@ -48,7 +89,10 @@ async def serve_frontend():
         with open("index.html", "r") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
-        return HTMLResponse(content="<h1>Study Buddy Bro is running!</h1><a href='/docs'>API Docs</a>")
+        return HTMLResponse(
+            content="<h1>Study Buddy Bro is running!</h1>"
+                    "<a href='/docs'>API Docs</a>"
+        )
 
 if __name__ == "__main__":
     import uvicorn

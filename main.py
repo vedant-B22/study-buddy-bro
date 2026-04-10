@@ -17,6 +17,7 @@ async def health_check():
         "app": "Study Buddy Bro",
         "project": "study-buddy-bro-guide",
         "database": "study-buddy-datastore",
+        "model": "gemini-2.5-flash (Vertex AI)",   # ✅ Updated
         "agents": [
             "studybuddy_primary",
             "schedule_agent",

@@ -11,44 +11,86 @@ from email.mime.text import MIMEText
 
 load_dotenv()
 
+PROJECT_ID = "study-buddy-bro-guide"
+LOCATION   = "us-central1"
+MODEL      = "gemini-2.5-flash"   # ✅ Updated - confirmed available in your Vertex AI Studio
+
 db = datastore.Client(
-    project="study-buddy-bro-guide",
+    project=PROJECT_ID,
     database="study-buddy-datastore"
 )
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-2.0-flash:generateContent"
-    f"?key={GEMINI_API_KEY}"
-)
-
-def call_gemini(prompt: str) -> str:
+# ─────────────────────────────────────────
+# VERTEX AI AUTH + CALL
+# ─────────────────────────────────────────
+def get_vertex_token() -> str:
     import google.auth
     import google.auth.transport.requests
-    try:
-        creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req)
-        url = (
-            "https://us-central1-aiplatform.googleapis.com/v1"
-            "/projects/study-buddy-bro-guide"
-            "/locations/us-central1"
-            "/publishers/google/models/gemini-2.0-flash:generateContent"
-        )
-        headers = {
-            "Authorization": f"Bearer {creds.token}",
-            "Content-Type": "application/json"
-        }
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        r = requests.post(url, headers=headers, json=payload, timeout=30)
-        r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        return f"Gemini error: {str(e)}"
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    auth_req = google.auth.transport.requests.Request()
+    creds.refresh(auth_req)
+    return creds.token
 
+def call_gemini(prompt: str, model: str = None) -> str:
+    import time
+
+    FALLBACK_MODELS = [
+        "gemini-2.5-flash",        # ✅ Primary - confirmed in your Vertex AI Studio
+        "gemini-2.5-flash-lite",   # ✅ Fallback 1
+        "gemini-2.0-flash",        # ✅ Fallback 2
+        "gemini-2.0-flash-lite",   # ✅ Fallback 3
+    ]
+
+    models_to_try = FALLBACK_MODELS if model is None else [model] + [m for m in FALLBACK_MODELS if m != model]
+
+    for current_model in models_to_try:
+        for attempt in range(2):
+            try:
+                token = get_vertex_token()
+                url   = (
+                    f"https://{LOCATION}-aiplatform.googleapis.com/v1"
+                    f"/projects/{PROJECT_ID}"
+                    f"/locations/{LOCATION}"
+                    f"/publishers/google/models/{current_model}:generateContent"
+                )
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type":  "application/json"
+                }
+                payload = {
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.7,
+                        "maxOutputTokens": 1024
+                    }
+                }
+                r = requests.post(url, headers=headers, json=payload, timeout=30)
+
+                if r.status_code == 429:
+                    logging.warning(f"Rate limited on {current_model}, waiting...")
+                    time.sleep(10)
+                    continue
+
+                if r.status_code == 404:
+                    logging.warning(f"Model {current_model} not found (404), trying next...")
+                    break  # break inner loop, try next model
+
+                r.raise_for_status()
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+            except Exception as e:
+                logging.error(f"call_gemini [{current_model}] attempt {attempt + 1} error: {e}")
+                if attempt == 1:
+                    break  # try next model
+                time.sleep(3)
+
+    return "No available model found. Please check Vertex AI Model Garden."
+
+# ─────────────────────────────────────────
+# GOOGLE SERVICES
+# ─────────────────────────────────────────
 def get_google_services():
     try:
         creds, _ = default(scopes=[
@@ -64,6 +106,9 @@ def get_google_services():
         logging.error(f"Failed to get Google services: {e}")
         return None, None, None
 
+# ─────────────────────────────────────────
+# TOOLS
+# ─────────────────────────────────────────
 def create_study_schedule(topic: str, exam_date: str, daily_hours: int = 2, session_id: str = "default") -> str:
     try:
         calendar, _, _ = get_google_services()

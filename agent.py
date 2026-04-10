@@ -9,17 +9,36 @@ from dotenv import load_dotenv
 nest_asyncio.apply()
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-2.0-flash:generateContent"
-    f"?key={GEMINI_API_KEY}"
-)
+PROJECT_ID = "study-buddy-bro-guide"
+LOCATION   = "us-central1"
+MODEL      = "gemini-2.5-flash"   # ✅ Updated - confirmed available in your Vertex AI Studio
 
 db = datastore.Client(
-    project="study-buddy-bro-guide",
+    project=PROJECT_ID,
     database="study-buddy-datastore"
 )
+
+# ─────────────────────────────────────────
+# VERTEX AI AUTH HELPER
+# ─────────────────────────────────────────
+def get_vertex_token() -> str:
+    """Get a fresh access token using Application Default Credentials."""
+    import google.auth
+    import google.auth.transport.requests
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    auth_req = google.auth.transport.requests.Request()
+    creds.refresh(auth_req)
+    return creds.token
+
+def build_vertex_url(model: str = MODEL) -> str:
+    return (
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1"
+        f"/projects/{PROJECT_ID}"
+        f"/locations/{LOCATION}"
+        f"/publishers/google/models/{model}:generateContent"
+    )
 
 # ─────────────────────────────────────────
 # FIRESTORE MEMORY
@@ -70,54 +89,74 @@ def get_student_profile(session_id: str) -> dict:
         return {}
 
 # ─────────────────────────────────────────
-# CORE GEMINI CALL
+# CORE VERTEX AI CALL
 # ─────────────────────────────────────────
-def call_gemini_with_system(system_prompt: str, user_message: str) -> str:
+def call_gemini_with_system(system_prompt: str, user_message: str, model: str = None) -> str:
     import time
-    import google.auth
-    import google.auth.transport.requests
-    
-    for attempt in range(3):
-        try:
-            # Use Application Default Credentials - no API key needed!
-            creds, _ = google.auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            auth_req = google.auth.transport.requests.Request()
-            creds.refresh(auth_req)
-            
-            url = (
-                "https://us-central1-aiplatform.googleapis.com/v1"
-                "/projects/study-buddy-bro-guide"
-                "/locations/us-central1"
-                "/publishers/google/models/gemini-2.0-flash:generateContent"
-            )
-            headers = {
-                "Authorization": f"Bearer {creds.token}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "system_instruction": {"parts": [{"text": system_prompt}]},
-                "contents": [{"role": "user", "parts": [{"text": user_message}]}]
-            }
-            r = requests.post(url, headers=headers, json=payload, timeout=60)
-            if r.status_code == 429:
-                time.sleep(10)
-                continue
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as e:
-            if attempt == 2:
-                return f"Agent error: {str(e)}"
-            time.sleep(5)
-    return "Please try again in a moment! 🙏"
+
+    FALLBACK_MODELS = [
+        "gemini-2.5-flash",        # ✅ Primary - confirmed in your Vertex AI Studio
+        "gemini-2.5-flash-lite",   # ✅ Fallback 1
+        "gemini-2.0-flash",        # ✅ Fallback 2
+        "gemini-2.0-flash-lite",   # ✅ Fallback 3
+    ]
+
+    models_to_try = FALLBACK_MODELS if model is None else [model] + [m for m in FALLBACK_MODELS if m != model]
+
+    for current_model in models_to_try:
+        for attempt in range(2):
+            try:
+                token   = get_vertex_token()
+                url     = build_vertex_url(current_model)
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type":  "application/json"
+                }
+                payload = {
+                    "system_instruction": {
+                        "parts": [{"text": system_prompt}]
+                    },
+                    "contents": [
+                        {"role": "user", "parts": [{"text": user_message}]}
+                    ],
+                    "generationConfig": {
+                        "temperature": 0.7,
+                        "maxOutputTokens": 1024
+                    }
+                }
+
+                r = requests.post(url, headers=headers, json=payload, timeout=60)
+
+                if r.status_code == 429:
+                    logging.warning(f"Rate limited on {current_model}, waiting...")
+                    time.sleep(10)
+                    continue
+
+                if r.status_code == 404:
+                    logging.warning(f"Model {current_model} not found (404), trying next...")
+                    break  # break inner loop, try next model
+
+                r.raise_for_status()
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+            except requests.exceptions.HTTPError as e:
+                logging.error(f"HTTP error [{current_model}] attempt {attempt + 1}: {e}")
+                if attempt == 1:
+                    break  # try next model
+                time.sleep(3)
+
+            except Exception as e:
+                logging.error(f"Unexpected error [{current_model}] attempt {attempt + 1}: {e}")
+                if attempt == 1:
+                    break  # try next model
+                time.sleep(3)
+
+    return "No available model found. Please check Vertex AI Model Garden for your project."
 
 # ─────────────────────────────────────────
-# SUB-AGENTS — each is a function that
-# calls Gemini with a specialized prompt
+# SUB-AGENTS
 # ─────────────────────────────────────────
 def schedule_agent(message: str, session_id: str) -> str:
-    from tools import create_study_schedule, get_upcoming_exams
     system = """You are a study schedule manager for Study Buddy Bro.
     Help students plan their study sessions and track exam dates.
     Be encouraging, realistic and specific about dates and times.
@@ -125,15 +164,12 @@ def schedule_agent(message: str, session_id: str) -> str:
     return call_gemini_with_system(system, message)
 
 def quiz_agent(message: str) -> str:
-    from tools import generate_quiz
-    # Extract topic from message and generate quiz
     system = """You are a quiz generator for Study Buddy Bro.
     Generate MCQ questions with 4 options (A, B, C, D) and correct answers.
     Always include explanations. Make questions educational and clear."""
     return call_gemini_with_system(system, message)
 
 def explainer_agent(message: str) -> str:
-    from tools import explain_topic
     system = """You are a patient tutor for Study Buddy Bro.
     Break down complex topics into:
     1. Simple definition
@@ -160,7 +196,6 @@ def reminder_agent(message: str) -> str:
 # PRIMARY AGENT — routes to sub-agents
 # ─────────────────────────────────────────
 def run_primary_agent(session_id: str, user_message: str, history: list) -> str:
-    # Build conversation context
     context = ""
     if history:
         context = "Previous conversation:\n"
@@ -168,9 +203,8 @@ def run_primary_agent(session_id: str, user_message: str, history: list) -> str:
             context += f"{h['role'].upper()}: {h['message']}\n"
         context += "\n"
 
-    # Step 1: Ask Gemini to identify intent
     routing_prompt = f"""You are Study Buddy Bro — a friendly AI study assistant.
-    
+
 You have 5 specialized agents:
 - schedule_agent: study plans, exams, calendar, timetables, scheduling
 - quiz_agent: MCQs, flashcards, practice questions, testing knowledge
@@ -192,62 +226,47 @@ If they need reminders: confirm the reminder setup.
 Always end with an encouraging next step.
 Be conversational, friendly and student-focused. 📚"""
 
-    full_message = context + f"Student: {user_message}"
-    
-    # Route to appropriate sub-agent based on keywords
-    msg_lower = user_message.lower()
-    
-    responses = []
-    
-    # Check for quiz intent
+    msg_lower  = user_message.lower()
+    responses  = []
+
     if any(w in msg_lower for w in ["quiz", "test me", "question", "mcq", "flashcard", "practice"]):
         responses.append(quiz_agent(user_message))
-    
-    # Check for explanation intent
+
     elif any(w in msg_lower for w in ["explain", "what is", "what are", "how does", "tell me about", "understand", "definition"]):
         responses.append(explainer_agent(user_message))
-    
-    # Check for schedule intent
+
     elif any(w in msg_lower for w in ["exam", "schedule", "plan", "timetable", "days", "prepare", "calendar", "session"]):
         responses.append(schedule_agent(user_message, session_id))
-    
-    # Check for progress intent
+
     elif any(w in msg_lower for w in ["progress", "studied", "completed", "streak", "how much", "topics done"]):
         responses.append(progress_agent(user_message, session_id))
-    
-    # Check for reminder intent
+
     elif any(w in msg_lower for w in ["remind", "reminder", "notify", "alert", "email"]):
         responses.append(reminder_agent(user_message))
-    
-    # Default — use primary agent with full context
+
     else:
         responses.append(call_gemini_with_system(routing_prompt, user_message))
-    
+
     return "\n\n".join(responses)
 
 # ─────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────
 def run_agent_with_memory(session_id: str, user_message: str) -> str:
-    # Save user message
     save_conversation(session_id, "user", user_message)
-    
-    # Get history
     history = get_conversation_history(session_id)
-    
-    # Run primary agent
+
     try:
         reply = run_primary_agent(session_id, user_message, history)
     except Exception as e:
         reply = f"Sorry, something went wrong: {str(e)} — Please try again! 😅"
-    
-    # Save reply
+
     save_conversation(session_id, "assistant", reply)
     save_student_profile(session_id, {
         "last_active": datetime.datetime.utcnow(),
-        "session_id": session_id
+        "session_id":  session_id
     })
-    
+
     return reply
 
 def get_agent():

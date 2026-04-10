@@ -40,7 +40,6 @@ async def chat(request: Request):
                 content={"error": "Message cannot be empty"}
             )
 
-        # Run agent in a separate thread to avoid ADK timeout issue
         loop  = asyncio.get_event_loop()
         reply = await loop.run_in_executor(
             None,

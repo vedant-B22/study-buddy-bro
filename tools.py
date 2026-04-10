@@ -19,14 +19,31 @@ db = datastore.Client(
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-1.5-flash:generateContent"
+    "/v1beta/models/gemini-2.0-flash:generateContent"
     f"?key={GEMINI_API_KEY}"
 )
 
 def call_gemini(prompt: str) -> str:
+    import google.auth
+    import google.auth.transport.requests
     try:
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        auth_req = google.auth.transport.requests.Request()
+        creds.refresh(auth_req)
+        url = (
+            "https://us-central1-aiplatform.googleapis.com/v1"
+            "/projects/study-buddy-bro-guide"
+            "/locations/us-central1"
+            "/publishers/google/models/gemini-2.0-flash:generateContent"
+        )
+        headers = {
+            "Authorization": f"Bearer {creds.token}",
+            "Content-Type": "application/json"
+        }
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        r = requests.post(GEMINI_URL, json=payload, timeout=30)
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
         r.raise_for_status()
         return r.json()["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:

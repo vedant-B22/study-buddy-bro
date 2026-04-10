@@ -12,7 +12,7 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-1.5-flash:generateContent"
+    "/v1beta/models/gemini-2.0-flash:generateContent"
     f"?key={GEMINI_API_KEY}"
 )
 
@@ -73,21 +73,44 @@ def get_student_profile(session_id: str) -> dict:
 # CORE GEMINI CALL
 # ─────────────────────────────────────────
 def call_gemini_with_system(system_prompt: str, user_message: str) -> str:
-    try:
-        payload = {
-            "system_instruction": {
-                "parts": [{"text": system_prompt}]
-            },
-            "contents": [{
-                "role": "user",
-                "parts": [{"text": user_message}]
-            }]
-        }
-        r = requests.post(GEMINI_URL, json=payload, timeout=60)
-        r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        return f"Agent error: {str(e)}"
+    import time
+    import google.auth
+    import google.auth.transport.requests
+    
+    for attempt in range(3):
+        try:
+            # Use Application Default Credentials - no API key needed!
+            creds, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            auth_req = google.auth.transport.requests.Request()
+            creds.refresh(auth_req)
+            
+            url = (
+                "https://us-central1-aiplatform.googleapis.com/v1"
+                "/projects/study-buddy-bro-guide"
+                "/locations/us-central1"
+                "/publishers/google/models/gemini-2.0-flash:generateContent"
+            )
+            headers = {
+                "Authorization": f"Bearer {creds.token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "contents": [{"role": "user", "parts": [{"text": user_message}]}]
+            }
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            if r.status_code == 429:
+                time.sleep(10)
+                continue
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            if attempt == 2:
+                return f"Agent error: {str(e)}"
+            time.sleep(5)
+    return "Please try again in a moment! 🙏"
 
 # ─────────────────────────────────────────
 # SUB-AGENTS — each is a function that

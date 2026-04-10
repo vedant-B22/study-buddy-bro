@@ -1,31 +1,29 @@
 import os
 import datetime
-import asyncio
 import logging
+import requests
 import nest_asyncio
-from google.adk.agents import Agent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.adk.tools import FunctionTool
 from google.cloud import datastore
-from google.genai import types
 from dotenv import load_dotenv
-from tools import (
-    create_study_schedule, get_upcoming_exams,
-    generate_quiz, explain_topic, send_study_reminder,
-    get_progress, update_progress, add_study_topic
-)
 
 nest_asyncio.apply()
 load_dotenv()
 
-os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com"
+    "/v1beta/models/gemini-2.0-flash:generateContent"
+    f"?key={GEMINI_API_KEY}"
+)
 
 db = datastore.Client(
     project="study-buddy-bro-guide",
     database="study-buddy-datastore"
 )
 
+# ─────────────────────────────────────────
+# FIRESTORE MEMORY
+# ─────────────────────────────────────────
 def save_conversation(session_id: str, role: str, message: str):
     try:
         truncated = message[:1400] if len(message) > 1400 else message
@@ -39,7 +37,7 @@ def save_conversation(session_id: str, role: str, message: str):
         })
         db.put(entity)
     except Exception as e:
-        logging.error(f"Failed to save conversation: {e}")
+        logging.error(f"Save conversation error: {e}")
 
 def get_conversation_history(session_id: str) -> list:
     try:
@@ -51,7 +49,7 @@ def get_conversation_history(session_id: str) -> list:
         messages = list(query.fetch(limit=10))
         return [{"role": m["role"], "message": m["message"]} for m in messages]
     except Exception as e:
-        logging.error(f"Failed to get history: {e}")
+        logging.error(f"Get history error: {e}")
         return []
 
 def save_student_profile(session_id: str, data: dict):
@@ -61,149 +59,173 @@ def save_student_profile(session_id: str, data: dict):
         entity.update(data)
         db.put(entity)
     except Exception as e:
-        logging.error(f"Failed to save profile: {e}")
+        logging.error(f"Save profile error: {e}")
 
 def get_student_profile(session_id: str) -> dict:
     try:
         key = db.key("students", session_id)
         entity = db.get(key)
         return dict(entity) if entity else {}
-    except Exception as e:
+    except Exception:
         return {}
 
-schedule_agent = Agent(
-    name="schedule_agent",
-    model="gemini-2.0-flash",
-    description="Handles study scheduling, exam tracking and calendar management.",
-    instruction="""You are a study schedule manager for Study Buddy Bro.
-    Create study sessions on Google Calendar, retrieve upcoming exams,
-    and suggest how to split study time. Be encouraging and realistic.""",
-    tools=[FunctionTool(create_study_schedule), FunctionTool(get_upcoming_exams)]
-)
+# ─────────────────────────────────────────
+# CORE GEMINI CALL
+# ─────────────────────────────────────────
+def call_gemini_with_system(system_prompt: str, user_message: str) -> str:
+    try:
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": system_prompt}]
+            },
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": user_message}]
+            }]
+        }
+        r = requests.post(GEMINI_URL, json=payload, timeout=60)
+        r.raise_for_status()
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        return f"Agent error: {str(e)}"
 
-quiz_agent = Agent(
-    name="quiz_agent",
-    model="gemini-2.0-flash",
-    description="Generates quizzes, MCQs and flashcards for any study topic.",
-    instruction="""You are a quiz generator for Study Buddy Bro.
-    Generate MCQ questions with 4 options and correct answers.
-    Create clear, accurate questions matched to the student's topic.""",
-    tools=[FunctionTool(generate_quiz)]
-)
+# ─────────────────────────────────────────
+# SUB-AGENTS — each is a function that
+# calls Gemini with a specialized prompt
+# ─────────────────────────────────────────
+def schedule_agent(message: str, session_id: str) -> str:
+    from tools import create_study_schedule, get_upcoming_exams
+    system = """You are a study schedule manager for Study Buddy Bro.
+    Help students plan their study sessions and track exam dates.
+    Be encouraging, realistic and specific about dates and times.
+    When the student mentions an exam, suggest a study plan with specific days."""
+    return call_gemini_with_system(system, message)
 
-explainer_agent = Agent(
-    name="explainer_agent",
-    model="gemini-2.0-flash",
-    description="Explains any academic topic in simple language.",
-    instruction="""You are a patient tutor for Study Buddy Bro.
-    Break down complex topics into simple explanations with analogies
-    and real-world examples. Always check if the student understood.""",
-    tools=[FunctionTool(explain_topic)]
-)
+def quiz_agent(message: str) -> str:
+    from tools import generate_quiz
+    # Extract topic from message and generate quiz
+    system = """You are a quiz generator for Study Buddy Bro.
+    Generate MCQ questions with 4 options (A, B, C, D) and correct answers.
+    Always include explanations. Make questions educational and clear."""
+    return call_gemini_with_system(system, message)
 
-progress_agent = Agent(
-    name="progress_agent",
-    model="gemini-2.0-flash",
-    description="Tracks study progress, completed topics and study streaks.",
-    instruction="""You are a study progress tracker for Study Buddy Bro.
-    Track topics studied, show completion percentage per subject,
-    maintain study streaks and motivate the student.""",
-    tools=[FunctionTool(get_progress), FunctionTool(update_progress), FunctionTool(add_study_topic)]
-)
+def explainer_agent(message: str) -> str:
+    from tools import explain_topic
+    system = """You are a patient tutor for Study Buddy Bro.
+    Break down complex topics into:
+    1. Simple definition
+    2. Real-world analogy
+    3. Key points (bullet list)
+    4. One worked example
+    Always end with: Want me to quiz you on this? 📝"""
+    return call_gemini_with_system(system, message)
 
-reminder_agent = Agent(
-    name="reminder_agent",
-    model="gemini-2.0-flash",
-    description="Sends email reminders for exams and study summaries.",
-    instruction="""You are a study reminder assistant for Study Buddy Bro.
-    Send email reminders for upcoming exams and pending topics.
-    Keep messages short, clear and motivating.""",
-    tools=[FunctionTool(send_study_reminder)]
-)
+def progress_agent(message: str, session_id: str) -> str:
+    from tools import get_progress
+    progress_data = get_progress(session_id)
+    system = """You are a study progress tracker for Study Buddy Bro.
+    Show the student their progress, motivate them and suggest what to study next."""
+    return call_gemini_with_system(system, f"{message}\n\nCurrent progress data:\n{progress_data}")
 
-primary_agent = Agent(
-    name="studybuddy_primary",
-    model="gemini-2.0-flash",
-    description="Primary Study Buddy Bro agent that routes requests to sub-agents.",
-    instruction="""You are Study Buddy Bro — a friendly AI study assistant.
-    You coordinate 5 specialized agents:
-    - schedule_agent: study plans, exams, calendar, timetables
-    - quiz_agent: MCQs, flashcards, practice questions
-    - explainer_agent: understanding topics, concepts, explanations
-    - progress_agent: tracking completed topics, study streaks
-    - reminder_agent: email reminders and notifications
+def reminder_agent(message: str) -> str:
+    system = """You are a study reminder assistant for Study Buddy Bro.
+    Help students set reminders and send motivating study alerts.
+    Keep messages short, clear and encouraging."""
+    return call_gemini_with_system(system, message)
 
-    When a student messages you:
-    1. Understand their intent
-    2. Route to correct sub-agent (or multiple if needed)
-    3. Combine responses into one friendly reply
-    4. End with an encouraging message or next step
-
-    Examples:
-    - "I have a math exam in 2 days" → schedule_agent + reminder_agent
-    - "Explain photosynthesis" → explainer_agent
-    - "Quiz me on Python" → quiz_agent
-    - "What have I studied?" → progress_agent
-
-    Always be warm, supportive and student-friendly.""",
-    sub_agents=[schedule_agent, quiz_agent, explainer_agent, progress_agent, reminder_agent]
-)
-
-def get_agent():
-    return primary_agent
-
-async def _run_agent_async(session_id: str, full_message: str) -> str:
-    svc = InMemorySessionService()
-    r = Runner(
-        agent=primary_agent,
-        app_name="study-buddy-bro",
-        session_service=svc
-    )
-    await svc.create_session(
-        app_name="study-buddy-bro",
-        user_id="user",
-        session_id=session_id
-    )
-    content = types.Content(
-        role="user",
-        parts=[types.Part(text=full_message)]
-    )
-    result = "I'm here to help! What are you studying today? 📚"
-    async for event in r.run_async(
-        user_id="user",
-        session_id=session_id,
-        new_message=content
-    ):
-        if hasattr(event, 'is_final_response') and event.is_final_response():
-            if hasattr(event, 'content') and event.content:
-                for part in event.content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        result = part.text
-                        break
-    return result
-
-def run_agent_with_memory(session_id: str, user_message: str) -> str:
-    save_conversation(session_id, "user", user_message)
-    history = get_conversation_history(session_id)
-
+# ─────────────────────────────────────────
+# PRIMARY AGENT — routes to sub-agents
+# ─────────────────────────────────────────
+def run_primary_agent(session_id: str, user_message: str, history: list) -> str:
+    # Build conversation context
     context = ""
     if history:
         context = "Previous conversation:\n"
-        for h in history:
+        for h in history[-5:]:
             context += f"{h['role'].upper()}: {h['message']}\n"
-        context += "\nCurrent message: "
-    full_message = context + user_message
+        context += "\n"
 
-    reply = "I'm here to help! What are you studying today? 📚"
+    # Step 1: Ask Gemini to identify intent
+    routing_prompt = f"""You are Study Buddy Bro — a friendly AI study assistant.
+    
+You have 5 specialized agents:
+- schedule_agent: study plans, exams, calendar, timetables, scheduling
+- quiz_agent: MCQs, flashcards, practice questions, testing knowledge
+- explainer_agent: explaining topics, concepts, definitions, understanding
+- progress_agent: tracking completed topics, study streaks, progress
+- reminder_agent: email reminders, notifications, alerts
+
+{context}Student says: "{user_message}"
+
+First, identify which agents are needed (can be multiple).
+Then respond as Study Buddy Bro — warm, helpful and encouraging.
+
+If they need scheduling: create a specific study plan with days and hours.
+If they need explanation: explain clearly with examples.
+If they need a quiz: generate 3-5 MCQ questions immediately.
+If they need progress: show their study statistics.
+If they need reminders: confirm the reminder setup.
+
+Always end with an encouraging next step.
+Be conversational, friendly and student-focused. 📚"""
+
+    full_message = context + f"Student: {user_message}"
+    
+    # Route to appropriate sub-agent based on keywords
+    msg_lower = user_message.lower()
+    
+    responses = []
+    
+    # Check for quiz intent
+    if any(w in msg_lower for w in ["quiz", "test me", "question", "mcq", "flashcard", "practice"]):
+        responses.append(quiz_agent(user_message))
+    
+    # Check for explanation intent
+    elif any(w in msg_lower for w in ["explain", "what is", "what are", "how does", "tell me about", "understand", "definition"]):
+        responses.append(explainer_agent(user_message))
+    
+    # Check for schedule intent
+    elif any(w in msg_lower for w in ["exam", "schedule", "plan", "timetable", "days", "prepare", "calendar", "session"]):
+        responses.append(schedule_agent(user_message, session_id))
+    
+    # Check for progress intent
+    elif any(w in msg_lower for w in ["progress", "studied", "completed", "streak", "how much", "topics done"]):
+        responses.append(progress_agent(user_message, session_id))
+    
+    # Check for reminder intent
+    elif any(w in msg_lower for w in ["remind", "reminder", "notify", "alert", "email"]):
+        responses.append(reminder_agent(user_message))
+    
+    # Default — use primary agent with full context
+    else:
+        responses.append(call_gemini_with_system(routing_prompt, user_message))
+    
+    return "\n\n".join(responses)
+
+# ─────────────────────────────────────────
+# MAIN ENTRY POINT
+# ─────────────────────────────────────────
+def run_agent_with_memory(session_id: str, user_message: str) -> str:
+    # Save user message
+    save_conversation(session_id, "user", user_message)
+    
+    # Get history
+    history = get_conversation_history(session_id)
+    
+    # Run primary agent
     try:
-        loop = asyncio.get_event_loop()
-        reply = loop.run_until_complete(_run_agent_async(session_id, full_message))
+        reply = run_primary_agent(session_id, user_message, history)
     except Exception as e:
-        reply = f"Agent error: {str(e)}"
-
+        reply = f"Sorry, something went wrong: {str(e)} — Please try again! 😅"
+    
+    # Save reply
     save_conversation(session_id, "assistant", reply)
     save_student_profile(session_id, {
         "last_active": datetime.datetime.utcnow(),
         "session_id": session_id
     })
+    
     return reply
+
+def get_agent():
+    return None

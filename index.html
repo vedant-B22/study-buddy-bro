@@ -7,16 +7,19 @@
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
 <style>
   :root {
-    --black:   #0a0a0a;
-    --dark:    #141414;
-    --card:    #1a1a1a;
-    --border:  #2a2a2a;
-    --beige:   #e8dcc8;
-    --beige2:  #f5efe3;
-    --gold:    #c9a84c;
-    --gold2:   #e8c46a;
-    --white:   #f8f6f2;
-    --muted:   #6b6560;
+    --black:  #0a0a0a;
+    --dark:   #141414;
+    --card:   #1a1a1a;
+    --card2:  #202020;
+    --border: #2a2a2a;
+    --beige:  #e8dcc8;
+    --beige2: #f5efe3;
+    --gold:   #c9a84c;
+    --gold2:  #e8c46a;
+    --white:  #f8f6f2;
+    --muted:  #6b6560;
+    --green:  #4caf7d;
+    --red:    #e05c5c;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -42,11 +45,7 @@
     flex-shrink: 0;
   }
 
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
+  .logo { display: flex; align-items: center; gap: 10px; }
 
   .logo-icon {
     width: 34px; height: 34px;
@@ -60,17 +59,10 @@
     font-family: 'Playfair Display', serif;
     font-size: 1.15rem;
     color: var(--white);
-    letter-spacing: 0.01em;
   }
-
   .logo-text span { color: var(--gold); }
 
-  .agents-row {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
+  .agents-row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
   .agent-badge {
     background: transparent;
@@ -79,7 +71,6 @@
     font-size: 0.7rem;
     padding: 3px 9px;
     border-radius: 20px;
-    letter-spacing: 0.02em;
   }
 
   /* ── Chat ── */
@@ -97,7 +88,6 @@
   .chat-box::-webkit-scrollbar-track { background: transparent; }
   .chat-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-  /* Center the messages in a max-width column */
   .chat-inner {
     width: 100%;
     max-width: 760px;
@@ -129,8 +119,7 @@
     flex-shrink: 0;
     margin-top: 2px;
   }
-
-  .avatar.bot  { background: linear-gradient(135deg, var(--gold), var(--gold2)); color: var(--black); }
+  .avatar.bot     { background: linear-gradient(135deg, var(--gold), var(--gold2)); color: var(--black); }
   .avatar.user-av { background: var(--card); border: 1px solid var(--border); color: var(--beige); }
 
   .bubble {
@@ -157,10 +146,7 @@
   }
 
   /* typing */
-  .typing .bubble {
-    display: flex; gap: 5px; align-items: center;
-    padding: 14px 18px;
-  }
+  .typing .bubble { display: flex; gap: 5px; align-items: center; padding: 14px 18px; }
   .dot {
     width: 6px; height: 6px;
     background: var(--gold);
@@ -174,6 +160,182 @@
     0%,80%,100% { transform: scale(0.75); opacity: 0.4; }
     40%         { transform: scale(1.2);  opacity: 1; }
   }
+
+  /* ── QUIZ CARD ── */
+  .quiz-container {
+    max-width: 72%;
+    animation: fadeUp 0.25s ease;
+  }
+
+  .quiz-header {
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    color: var(--black);
+    padding: 10px 16px;
+    border-radius: 12px 12px 0 0;
+    font-weight: 600;
+    font-size: 0.85rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .quiz-progress-text { font-size: 0.75rem; opacity: 0.8; }
+
+  .quiz-progress-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 0;
+  }
+  .quiz-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--gold), var(--gold2));
+    border-radius: 2px;
+    transition: width 0.4s ease;
+  }
+
+  .quiz-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-top: none;
+    padding: 16px;
+  }
+
+  .quiz-question {
+    color: var(--beige2);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    margin-bottom: 14px;
+    font-weight: 500;
+  }
+
+  .quiz-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .quiz-option {
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--beige);
+    text-align: left;
+    transition: all 0.18s ease;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .quiz-option:hover:not(:disabled) {
+    border-color: var(--gold);
+    color: var(--white);
+    background: rgba(201,168,76,0.08);
+  }
+
+  .quiz-option.correct {
+    border-color: var(--green);
+    background: rgba(76,175,125,0.12);
+    color: var(--green);
+  }
+
+  .quiz-option.wrong {
+    border-color: var(--red);
+    background: rgba(224,92,92,0.1);
+    color: var(--red);
+  }
+
+  .quiz-option .opt-label {
+    background: var(--border);
+    border-radius: 4px;
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+    flex-shrink: 0;
+    transition: background 0.18s;
+  }
+
+  .quiz-option.correct .opt-label { background: var(--green); color: #fff; }
+  .quiz-option.wrong   .opt-label { background: var(--red);   color: #fff; }
+
+  .quiz-explanation {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: rgba(201,168,76,0.07);
+    border-left: 3px solid var(--gold);
+    border-radius: 0 6px 6px 0;
+    font-size: 0.8rem;
+    color: var(--beige);
+    line-height: 1.5;
+    display: none;
+  }
+
+  .quiz-next-btn {
+    margin-top: 12px;
+    background: linear-gradient(135deg, var(--gold), var(--gold2));
+    border: none;
+    border-radius: 8px;
+    padding: 9px 20px;
+    color: var(--black);
+    font-weight: 600;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    display: none;
+  }
+  .quiz-next-btn:hover { opacity: 0.88; }
+
+  .quiz-footer {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+    padding: 12px 16px;
+    border-radius: 0 0 12px 12px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  /* Score screen */
+  .quiz-score {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-top: none;
+    padding: 24px 16px;
+    text-align: center;
+    border-radius: 0 0 12px 12px;
+  }
+  .quiz-score .score-big {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.5rem;
+    color: var(--gold);
+    line-height: 1;
+  }
+  .quiz-score .score-label {
+    color: var(--beige);
+    font-size: 0.85rem;
+    margin-top: 6px;
+    margin-bottom: 14px;
+  }
+  .quiz-score .score-msg {
+    color: var(--muted);
+    font-size: 0.82rem;
+    margin-bottom: 16px;
+  }
+  .quiz-retry-btn {
+    background: transparent;
+    border: 1px solid var(--gold);
+    border-radius: 8px;
+    padding: 8px 18px;
+    color: var(--gold);
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all 0.18s;
+  }
+  .quiz-retry-btn:hover { background: var(--gold); color: var(--black); }
 
   /* ── Input ── */
   .input-wrap {
@@ -203,7 +365,6 @@
     outline: none;
     transition: border-color 0.2s;
   }
-
   .input-inner input::placeholder { color: var(--muted); }
   .input-inner input:focus { border-color: var(--gold); }
 
@@ -229,7 +390,6 @@
     padding-top: 6px;
     letter-spacing: 0.04em;
   }
-
   .status-dot {
     display: inline-block;
     width: 5px; height: 5px;
@@ -240,11 +400,10 @@
     opacity: 0.7;
   }
 
-  /* Responsive */
   @media (max-width: 600px) {
     .agents-row { display: none; }
     .header { padding: 12px 16px; }
-    .bubble { max-width: 86%; }
+    .bubble, .quiz-container { max-width: 90%; }
     .chat-box { padding: 18px 12px; }
     .input-wrap { padding: 10px 12px 14px; }
   }
@@ -299,6 +458,7 @@
     return "sbb_" + Math.random().toString(36).substr(2, 9);
   }
 
+  // ── Send message ──
   async function sendMessage() {
     const input   = document.getElementById("userInput");
     const sendBtn = document.getElementById("sendBtn");
@@ -306,7 +466,7 @@
     if (!msg) return;
 
     appendMessage("user", msg);
-    input.value = "";
+    input.value      = "";
     sendBtn.disabled = true;
 
     const typingId = showTyping();
@@ -321,7 +481,12 @@
       removeTyping(typingId);
 
       if (data.status === "success") {
-        appendMessage("bot", data.reply);
+        if (data.quiz) {
+          // Render interactive quiz
+          renderQuiz(data.quiz);
+        } else {
+          appendMessage("bot", data.reply);
+        }
       } else {
         appendMessage("bot", "Something went wrong. Please try again.\n\nError: " + (data.error || "Unknown"));
       }
@@ -334,6 +499,7 @@
     input.focus();
   }
 
+  // ── Append plain text message ──
   function appendMessage(role, text) {
     const inner   = document.getElementById("chatInner");
     const chatBox = document.getElementById("chatBox");
@@ -342,11 +508,16 @@
     const avatarHTML = role === "user"
       ? `<div class="avatar user-av">👤</div>`
       : `<div class="avatar bot">✦</div>`;
-    div.innerHTML = `${avatarHTML}<div class="bubble">${text.replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div>`;
+    div.innerHTML = `${avatarHTML}<div class="bubble">${escapeHtml(text)}</div>`;
     inner.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
   }
 
+  function escapeHtml(t) {
+    return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  // ── Typing indicator ──
   function showTyping() {
     const inner   = document.getElementById("chatInner");
     const chatBox = document.getElementById("chatBox");
@@ -363,6 +534,128 @@
   function removeTyping(id) {
     const el = document.getElementById(id);
     if (el) el.remove();
+  }
+
+  // ── INTERACTIVE QUIZ RENDERER ──
+  function renderQuiz(quizData) {
+    if (!quizData.questions || quizData.questions.length === 0) {
+      appendMessage("bot", "Sorry, I couldn't generate a quiz. Please try again!");
+      return;
+    }
+
+    const inner   = document.getElementById("chatInner");
+    const chatBox = document.getElementById("chatBox");
+
+    const questions = quizData.questions;
+    const total     = questions.length;
+    let   current   = 0;
+    let   score     = 0;
+    const labels    = ["A", "B", "C", "D"];
+
+    // Wrapper
+    const wrapper = document.createElement("div");
+    wrapper.className = "quiz-container";
+
+    function buildQuestionHTML(idx) {
+      const q   = questions[idx];
+      const pct = ((idx) / total) * 100;
+
+      return `
+        <div class="quiz-header">
+          <span>📝 ${escapeHtml(quizData.topic || "Quiz")}</span>
+          <span class="quiz-progress-text">Q${idx + 1} of ${total}</span>
+        </div>
+        <div class="quiz-progress-bar">
+          <div class="quiz-progress-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="quiz-card" id="quizCard_${idx}">
+          <div class="quiz-question">${escapeHtml(q.q)}</div>
+          <div class="quiz-options" id="quizOptions_${idx}">
+            ${q.options.map((opt, i) => `
+              <button class="quiz-option" onclick="selectAnswer(${idx}, '${labels[i]}', this)" data-label="${labels[i]}">
+                <span class="opt-label">${labels[i]}</span>
+                <span>${escapeHtml(opt)}</span>
+              </button>
+            `).join("")}
+          </div>
+          <div class="quiz-explanation" id="quizExp_${idx}">${escapeHtml(q.explanation)}</div>
+          <button class="quiz-next-btn" id="quizNext_${idx}" onclick="nextQuestion(${idx})">
+            ${idx + 1 < total ? "Next Question →" : "See Results"}
+          </button>
+        </div>
+        <div class="quiz-footer">Click an option to answer</div>
+      `;
+    }
+
+    function buildScoreHTML() {
+      const pct = Math.round((score / total) * 100);
+      let msg = "";
+      if (pct === 100) msg = "🏆 Perfect score! You're a genius!";
+      else if (pct >= 80) msg = "🎉 Excellent! Almost perfect!";
+      else if (pct >= 60) msg = "👍 Good job! A bit more practice and you'll nail it.";
+      else if (pct >= 40) msg = "📖 Keep studying — you'll get there!";
+      else msg = "💪 Don't give up! Review the topic and try again.";
+
+      return `
+        <div class="quiz-header">
+          <span>📝 ${escapeHtml(quizData.topic || "Quiz")} — Results</span>
+        </div>
+        <div class="quiz-progress-bar">
+          <div class="quiz-progress-fill" style="width:100%"></div>
+        </div>
+        <div class="quiz-score">
+          <div class="score-big">${score}/${total}</div>
+          <div class="score-label">${pct}% correct</div>
+          <div class="score-msg">${msg}</div>
+          <button class="quiz-retry-btn" onclick="retryQuiz()">🔄 Try Again</button>
+        </div>
+      `;
+    }
+
+    // Attach to DOM
+    wrapper.innerHTML = buildQuestionHTML(0);
+    inner.appendChild(wrapper);
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    // Expose functions to onclick handlers
+    window.selectAnswer = function(idx, chosen, btn) {
+      const q       = questions[idx];
+      const correct = q.answer;
+      const optBtns = document.querySelectorAll(`#quizOptions_${idx} .quiz-option`);
+
+      // Disable all options
+      optBtns.forEach(b => {
+        b.disabled = true;
+        if (b.dataset.label === correct) b.classList.add("correct");
+        else if (b === btn && chosen !== correct) b.classList.add("wrong");
+      });
+
+      if (chosen === correct) score++;
+
+      // Show explanation
+      document.getElementById(`quizExp_${idx}`).style.display = "block";
+      // Show next button
+      document.getElementById(`quizNext_${idx}`).style.display = "inline-block";
+
+      chatBox.scrollTop = chatBox.scrollHeight;
+    };
+
+    window.nextQuestion = function(idx) {
+      current = idx + 1;
+      if (current >= total) {
+        wrapper.innerHTML = buildScoreHTML();
+      } else {
+        wrapper.innerHTML = buildQuestionHTML(current);
+      }
+      chatBox.scrollTop = chatBox.scrollHeight;
+    };
+
+    window.retryQuiz = function() {
+      score   = 0;
+      current = 0;
+      wrapper.innerHTML = buildQuestionHTML(0);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    };
   }
 </script>
 </body>

@@ -10,6 +10,7 @@ load_dotenv()
 
 app = FastAPI(title="Study Buddy Bro", version="1.0.0")
 
+
 @app.get("/health")
 async def health_check():
     return {
@@ -17,7 +18,7 @@ async def health_check():
         "app": "Study Buddy Bro",
         "project": "study-buddy-bro-guide",
         "database": "study-buddy-datastore",
-        "model": "gemini-2.5-flash (Vertex AI)",   # ✅ Updated
+        "model": "gemini-2.5-flash (Vertex AI)",
         "agents": [
             "studybuddy_primary",
             "schedule_agent",
@@ -27,6 +28,7 @@ async def health_check():
             "reminder_agent"
         ]
     }
+
 
 @app.post("/chat")
 async def chat(request: Request):
@@ -49,6 +51,18 @@ async def chat(request: Request):
             user_message
         )
 
+        # Check if quiz agent returned a JSON quiz signal
+        if reply.startswith("QUIZ_JSON:"):
+            topic = reply[len("QUIZ_JSON:"):].strip()
+            from tools import generate_quiz_json
+            quiz_data = await loop.run_in_executor(None, generate_quiz_json, topic, 5)
+            return JSONResponse(content={
+                "session_id": session_id,
+                "reply": "",
+                "quiz": quiz_data,
+                "status": "success"
+            })
+
         return JSONResponse(content={
             "session_id": session_id,
             "reply": reply,
@@ -60,6 +74,36 @@ async def chat(request: Request):
             status_code=500,
             content={"error": str(e), "status": "failed"}
         )
+
+
+@app.post("/quiz")
+async def generate_quiz_endpoint(request: Request):
+    """
+    Dedicated quiz endpoint.
+    Body: { "topic": "Photosynthesis", "num_questions": 5 }
+    Returns: { "status": "success", "quiz": { "topic": ..., "questions": [...] } }
+    """
+    try:
+        body          = await request.json()
+        topic         = body.get("topic", "General Knowledge").strip()
+        num_questions = int(body.get("num_questions", 5))
+        num_questions = max(1, min(num_questions, 10))  # clamp between 1-10
+
+        from tools import generate_quiz_json
+        loop      = asyncio.get_event_loop()
+        quiz_data = await loop.run_in_executor(None, generate_quiz_json, topic, num_questions)
+
+        return JSONResponse(content={
+            "status": "success",
+            "quiz": quiz_data
+        })
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "status": "failed"}
+        )
+
 
 @app.get("/history/{session_id}")
 async def get_history(session_id: str):
@@ -76,6 +120,7 @@ async def get_history(session_id: str):
             content={"error": str(e)}
         )
 
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
     try:
@@ -86,6 +131,7 @@ async def serve_frontend():
             content="<h1>Study Buddy Bro is running!</h1>"
                     "<a href='/docs'>API Docs</a>"
         )
+
 
 if __name__ == "__main__":
     import uvicorn

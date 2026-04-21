@@ -3,6 +3,7 @@ import datetime
 import logging
 import requests
 import base64
+import json
 from google.cloud import datastore
 from googleapiclient.discovery import build
 from google.auth import default
@@ -13,7 +14,7 @@ load_dotenv()
 
 PROJECT_ID = "study-buddy-bro-guide"
 LOCATION   = "us-central1"
-MODEL      = "gemini-2.5-flash"   # ✅ Updated - confirmed available in your Vertex AI Studio
+MODEL      = "gemini-2.5-flash"
 
 db = datastore.Client(
     project=PROJECT_ID,
@@ -37,10 +38,10 @@ def call_gemini(prompt: str, model: str = None) -> str:
     import time
 
     FALLBACK_MODELS = [
-        "gemini-2.5-flash",        # ✅ Primary - confirmed in your Vertex AI Studio
-        "gemini-2.5-flash-lite",   # ✅ Fallback 1
-        "gemini-2.0-flash",        # ✅ Fallback 2
-        "gemini-2.0-flash-lite",   # ✅ Fallback 3
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
     ]
 
     models_to_try = FALLBACK_MODELS if model is None else [model] + [m for m in FALLBACK_MODELS if m != model]
@@ -63,7 +64,7 @@ def call_gemini(prompt: str, model: str = None) -> str:
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                     "generationConfig": {
                         "temperature": 0.7,
-                        "maxOutputTokens": 1024
+                        "maxOutputTokens": 2048
                     }
                 }
                 r = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -75,7 +76,7 @@ def call_gemini(prompt: str, model: str = None) -> str:
 
                 if r.status_code == 404:
                     logging.warning(f"Model {current_model} not found (404), trying next...")
-                    break  # break inner loop, try next model
+                    break
 
                 r.raise_for_status()
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -83,7 +84,7 @@ def call_gemini(prompt: str, model: str = None) -> str:
             except Exception as e:
                 logging.error(f"call_gemini [{current_model}] attempt {attempt + 1} error: {e}")
                 if attempt == 1:
-                    break  # try next model
+                    break
                 time.sleep(3)
 
     return "No available model found. Please check Vertex AI Model Garden."
@@ -107,7 +108,7 @@ def get_google_services():
         return None, None, None
 
 # ─────────────────────────────────────────
-# TOOLS
+# SCHEDULE TOOLS
 # ─────────────────────────────────────────
 def create_study_schedule(topic: str, exam_date: str, daily_hours: int = 2, session_id: str = "default") -> str:
     try:
@@ -178,7 +179,71 @@ def get_upcoming_exams(session_id: str = "default") -> str:
     except Exception as e:
         return f"Could not fetch calendar: {str(e)}"
 
+# ─────────────────────────────────────────
+# QUIZ TOOL — returns JSON for interactive UI
+# ─────────────────────────────────────────
+def generate_quiz_json(topic: str, num_questions: int = 5) -> dict:
+    """
+    Returns a dict with quiz data for the frontend to render interactively.
+    Structure: { "topic": str, "questions": [ { "q": str, "options": [...], "answer": "A"|"B"|"C"|"D", "explanation": str } ] }
+    """
+    prompt = f"""Generate exactly {num_questions} multiple choice questions about "{topic}".
+
+Return ONLY a valid JSON object, no markdown, no extra text. Use this exact structure:
+{{
+  "topic": "{topic}",
+  "questions": [
+    {{
+      "q": "Question text here?",
+      "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
+      "answer": "A",
+      "explanation": "Brief explanation why A is correct."
+    }}
+  ]
+}}
+
+Rules:
+- "answer" must be exactly one of: "A", "B", "C", or "D"
+- options array must have exactly 4 items (index 0=A, 1=B, 2=C, 3=D)
+- questions must be educational and clear for a student
+- Return ONLY the JSON, nothing else"""
+
+    raw = call_gemini(prompt)
+
+    # Strip markdown code fences if present
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    if raw.endswith("```"):
+        raw = raw[:-3].strip()
+
+    try:
+        data = json.loads(raw)
+        # Validate structure
+        if "questions" not in data:
+            raise ValueError("Missing questions key")
+        for q in data["questions"]:
+            if not all(k in q for k in ["q", "options", "answer", "explanation"]):
+                raise ValueError("Missing question fields")
+            if len(q["options"]) != 4:
+                raise ValueError("Options must have 4 items")
+            if q["answer"] not in ["A", "B", "C", "D"]:
+                raise ValueError("Answer must be A/B/C/D")
+        return data
+    except Exception as e:
+        logging.error(f"Quiz JSON parse error: {e}\nRaw: {raw}")
+        # Return a fallback structure
+        return {
+            "topic": topic,
+            "error": "Could not generate quiz. Please try again.",
+            "questions": []
+        }
+
 def generate_quiz(topic: str, num_questions: int = 5) -> str:
+    """Legacy text format — kept for backward compat"""
     prompt = f"""Generate exactly {num_questions} multiple choice questions about "{topic}".
 Format each question exactly like this:
 Q1. [Question text]
@@ -191,17 +256,38 @@ Explanation: [One sentence why]
 Make questions educational and clear for a student."""
     return call_gemini(prompt)
 
+# ─────────────────────────────────────────
+# EXPLAINER TOOL — with difficulty levels
+# ─────────────────────────────────────────
 def explain_topic(topic: str, level: str = "beginner") -> str:
-    prompt = f"""Explain "{topic}" for a {level}-level student.
+    level_instructions = {
+        "eli5": "Explain like I'm 5 years old. Use very simple words, fun analogies, and short sentences. Avoid all technical terms.",
+        "beginner": "Explain for a beginner student. Use simple language, relatable analogies, and clear examples.",
+        "advanced": "Explain in depth for an advanced student. Include technical details, edge cases, and deeper concepts."
+    }
+    instruction = level_instructions.get(level, level_instructions["beginner"])
+
+    level_emojis = {"eli5": "🧒", "beginner": "📖", "advanced": "🎓"}
+    emoji = level_emojis.get(level, "📖")
+
+    prompt = f"""{instruction}
+
+Topic: "{topic}"
+
 Structure your explanation like this:
 1. Simple definition (2-3 sentences)
 2. Real-world analogy that makes it click
 3. Key points to remember (3-5 bullet points)
 4. One worked example
+
 Keep it friendly, clear and encouraging.
 End with: "Want me to quiz you on this? 📝" """
-    return call_gemini(prompt)
+    result = call_gemini(prompt)
+    return f"{emoji} **[{level.upper()}]**\n\n{result}"
 
+# ─────────────────────────────────────────
+# PROGRESS TOOLS
+# ─────────────────────────────────────────
 def add_study_topic(session_id: str, subject: str, topic: str) -> str:
     try:
         key = db.key("topics", f"{session_id}_{subject}_{topic}")
@@ -276,6 +362,9 @@ def get_progress(session_id: str) -> str:
     except Exception as e:
         return f"Could not fetch progress: {str(e)}"
 
+# ─────────────────────────────────────────
+# REMINDER TOOL
+# ─────────────────────────────────────────
 def send_study_reminder(to_email: str, subject_line: str, body: str) -> str:
     try:
         _, gmail, _ = get_google_services()
